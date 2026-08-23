@@ -1,0 +1,689 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>awg3-panel</title>
+<style>
+  :root { color-scheme: dark; --bg:#14161a; --fg:#e6e8ea; --dim:#9aa2ab;
+          --line:#262a30; --accent:#4da3ff; --bad:#ff6b6b; --ok:#5ad17f; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:1rem; background:var(--bg); color:var(--fg);
+         font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display:flex; align-items:baseline; gap:.75rem; margin-bottom:.75rem; flex-wrap:wrap; }
+  h1 { font-size:1.1rem; margin:0; font-weight:600; }
+  h2 { font-size:1rem; margin:0 0 .5rem; font-weight:600; }
+  .ro { color:var(--dim); border:1px solid var(--line); border-radius:4px;
+        padding:.1rem .4rem; font-size:.75rem; }
+
+  #ifaces { display:flex; gap:.4rem; flex-wrap:wrap; }
+  #ifaces button.iface { background:none; border:1px solid var(--line); color:var(--dim);
+        border-radius:4px; padding:.25rem .6rem; font-size:.85rem; cursor:pointer; }
+  #ifaces button.iface.active { color:var(--fg); border-color:var(--accent); }
+
+  #tabs { display:flex; gap:1rem; border-bottom:1px solid var(--line); margin-bottom:.75rem; }
+  #tabs button { background:none; border:0; border-bottom:2px solid transparent; color:var(--dim);
+        padding:.4rem .1rem; margin-bottom:-1px; cursor:pointer; font:inherit; }
+  #tabs button.active { color:var(--fg); border-bottom-color:var(--accent); }
+
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:.5rem .4rem; border-bottom:1px solid var(--line); }
+  th { color:var(--dim); font-weight:500; font-size:.8rem; text-transform:uppercase;
+       letter-spacing:.03em; }
+  td.num { font-variant-numeric:tabular-nums; color:var(--dim); }
+  .never { color:var(--bad); font-weight:600; }
+  .live { color:var(--ok); }
+  .off { opacity:.45; }
+  #err { color:var(--bad); margin:.5rem 0; min-height:1.2em; }
+  td.act { white-space:nowrap; }
+  td.act button, td.act a { background:none; border:1px solid var(--line); color:var(--fg);
+        border-radius:4px; padding:.2rem .5rem; margin-right:.25rem; font-size:.8rem;
+        cursor:pointer; text-decoration:none; display:inline-block; }
+  td.act button[data-act="delete"] { color:var(--bad); }
+
+  button { background:none; border:1px solid var(--line); color:var(--fg); border-radius:4px;
+           padding:.45rem .8rem; cursor:pointer; font:inherit; }
+  button.primary { background:var(--accent); color:#08121e; border:0; font-weight:600; }
+
+  input:not([type=checkbox]), textarea, select { background:#1b1e24; color:var(--fg);
+        border:1px solid var(--line); border-radius:4px; padding:.4rem .6rem; font:inherit; }
+  input[type=checkbox] { accent-color:var(--accent); }
+  input:disabled, textarea:disabled { opacity:.5; }
+
+  dialog { background:#1b1e24; color:var(--fg); border:1px solid var(--line); border-radius:8px;
+           padding:1rem; max-width:92vw; }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  #editdlg { width:520px; }
+  fieldset { border:1px solid var(--line); border-radius:6px; margin:0 0 .75rem; padding:.6rem .75rem; }
+  legend { padding:0 .4rem; color:var(--dim); font-size:.8rem; text-transform:uppercase;
+           letter-spacing:.03em; }
+  #editform label, #defaultsform label { display:block; margin:.5rem 0; font-size:.85rem; }
+  #editform input:not([type=checkbox]), #editform textarea,
+  #defaultsform input, #defaultsform textarea { display:block; width:100%; margin-top:.2rem; }
+  #editform small, #defaultsform small { display:block; color:var(--dim); margin-top:.15rem; }
+  menu { display:flex; gap:.5rem; margin:.75rem 0 0; padding:0; }
+  #editrotate { color:var(--bad); border-color:var(--bad); }
+  .setempty-wrap { display:flex; align-items:center; gap:.3rem; margin-top:.3rem; font-size:.8rem;
+        color:var(--dim); }
+  #defaultsform { max-width:480px; }
+  #defaultserr, #editerr { min-height:1.2em; }
+
+  @media (max-width:560px) { .hide-sm { display:none; } body { padding:.5rem; } }
+</style>
+
+<header>
+  <h1>awg3-panel</h1>
+  <!-- Переключатель интерфейсов (задача 11): id идёт в URL (#awg31), чтобы
+       вкладку можно было сохранить и вернуться в неё после перезагрузки —
+       см. чтение location.hash в скрипте ниже. data-edit нужен пока
+       только тестам и как задел: правка [Interface] — фаза 2, она отменена
+       целиком (поправка контролёра к этой задаче), и видимого «режима
+       сервера» здесь сознательно нет — рекламировать умение, которого в
+       этой сборке нет, значило бы врать в разметке. -->
+  <nav id="ifaces">
+    {{range .Ifaces}}
+    <button class="iface" data-iface="{{.ID}}" data-edit="{{.InterfaceEdit}}"
+            title="устройство {{.Interface}}">{{.Title}}</button>
+    {{end}}
+  </nav>
+  {{if .ReadOnly}}<span class="ro">режим только чтения</span>{{end}}
+</header>
+
+{{if not .ReadOnly}}
+<!-- Вкладки — не read-only свойство само по себе, но вкладка «Умолчания»
+     держится на GET .../defaults, а этот маршрут зарегистрирован ТОЛЬКО в
+     полной сборке (registerMutations, handlers_mutate.go) — в read-only
+     бинаре его нет даже для чтения. Поэтому вся панель вкладок целиком
+     скрыта в read-only разметке, а не только кнопка «Умолчания»: с одной
+     вкладкой («Пиры») сам переключатель — лишний элемент управления. -->
+<nav id="tabs">
+  <button data-tab="peers" class="active">Пиры</button>
+  <button data-tab="defaults">Умолчания</button>
+</nav>
+{{end}}
+
+<div id="err"></div>
+
+<script>
+// --- Общее для обеих сборок: выбор интерфейса и вкладки (чтение — не
+// мутация), поэтому этот блок вне read-only-гейта шаблона. ---
+
+const state = {
+  iface: location.hash.slice(1) || document.querySelector(".iface")?.dataset.iface,
+  tab: "peers",
+  // Кэш умолчаний текущего интерфейса: используется и модалкой правки пира
+  // (плейсхолдеры наследования), и вкладкой «Умолчания». null — «не
+  // загружены» ИЛИ «протухли» (после смены интерфейса или сохранения
+  // умолчаний) — оба места сами перезапрашивают их лениво при следующем
+  // обращении, см. openEdit/loadDefaultsTab.
+  defaults: null,
+};
+
+function apiURL(path) {
+  return "/api/ifaces/" + encodeURIComponent(state.iface) + path;
+}
+
+// api — тонкая обёртка над fetch с телом JSON и разбором ошибок панели:
+// обработчики отвечают {"error":"текст"} на 4xx (writeError, internal/web/
+// server.go), и этот текст обязан дойти до человека дословно (constraint 6
+// брифа задачи 11), а не потонуть в «что-то пошло не так».
+async function api(method, path, body) {
+  const r = await fetch(apiURL(path), {
+    method, cache: "no-store",
+    headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error(JSON.parse(text || "{}").error || r.status);
+  return text ? JSON.parse(text) : {};
+}
+
+function showErr(e) { document.getElementById("err").textContent = "Ошибка: " + e.message; }
+
+function markActive() {
+  document.querySelectorAll(".iface").forEach(b => {
+    b.classList.toggle("active", b.dataset.iface === state.iface);
+  });
+  document.querySelectorAll("#tabs [data-tab]").forEach(b => {
+    b.classList.toggle("active", b.dataset.tab === state.tab);
+  });
+  document.querySelectorAll("section[data-tab]").forEach(s => {
+    s.hidden = s.dataset.tab !== state.tab;
+  });
+}
+
+// switchIface — ЕДИНСТВЕННОЕ место, что означает «сменить интерфейс».
+// Раньше клик по кнопке интерфейса и hashchange (кнопки «назад»/«вперёд»
+// браузера) дублировали одну и ту же последовательность шагов каждый сам
+// по себе, и hashchange-путь забыл один из них (находка ревью задачи 11) —
+// вкладка «Умолчания» оставалась заполненной значениями СТАРОГО интерфейса
+// после навигации по истории, и «Сохранить» тихо улетало не туда. Общая
+// функция делает такое расхождение невозможным структурно: обоим путям
+// физически нечем отличаться, кроме способа, которым они её вызывают.
+function switchIface(id) {
+  state.iface = id;
+  state.defaults = null; // умолчания у каждого интерфейса свои
+  markActive();
+  refresh();
+  // loadDefaultsTab существует только в полной сборке (см. её <script> ниже,
+  // внутри read-only-гейта шаблона) — typeof вместо прямого вызова, чтобы
+  // read-only сборка не падала ReferenceError, если вкладка «Умолчания»
+  // всё-таки была активна (в ней самой её нет, но защита дешёвая).
+  if (state.tab === "defaults" && typeof loadDefaultsTab === "function") loadDefaultsTab();
+}
+
+document.getElementById("ifaces").addEventListener("click", e => {
+  const b = e.target.closest(".iface");
+  if (!b || b.dataset.iface === state.iface) return;
+  location.hash = b.dataset.iface;
+  switchIface(b.dataset.iface);
+});
+
+// #tabs целиком отсутствует в read-only разметке (см. комментарий у нав
+// выше) — опциональная цепочка на случай отсутствия элемента.
+document.getElementById("tabs")?.addEventListener("click", e => {
+  const b = e.target.closest("[data-tab]");
+  if (!b) return;
+  state.tab = b.dataset.tab;
+  markActive();
+  if (state.tab === "defaults" && typeof loadDefaultsTab === "function") loadDefaultsTab();
+});
+
+// Переключение назад/вперёд в истории браузера должно возвращать и вид
+// панели — иначе «сохранить вкладку в закладке» (константа 5 брифа) была бы
+// правдой только для первого перехода, а не для навигации по истории.
+// location.hash = ... в switchIface выше сама порождает hashchange, но
+// асинхронно (следующей задачей): к моменту, когда браузер её доставит,
+// state.iface уже равен id, и условие ниже эту повторную доставку отсеет —
+// двойного refresh() на обычный клик не будет.
+window.addEventListener("hashchange", () => {
+  const id = location.hash.slice(1);
+  if (id && id !== state.iface) switchIface(id);
+});
+</script>
+
+<section data-tab="peers">
+{{if not .ReadOnly}}
+<div style="margin:.75rem 0">
+  <input id="newname" placeholder="имя нового пира" maxlength="40">
+  <button id="addbtn" class="primary">+ Добавить</button>
+</div>
+<dialog id="qrdlg">
+  <div id="qrwarn" style="display:none;color:var(--bad);font-weight:600;margin-bottom:.5rem"></div>
+  <div id="qrname" style="margin-bottom:.5rem;font-weight:600"></div>
+  <img id="qrimg" alt="QR-код конфига" style="width:min(320px,80vw);image-rendering:pixelated">
+  <div style="margin-top:.75rem;display:flex;gap:.5rem">
+    <a id="qrdl" download style="color:var(--accent)">Скачать .conf</a>
+    <button onclick="qrdlg.close()" style="margin-left:auto">Закрыть</button>
+  </div>
+</dialog>
+
+<!-- Модалка правки пира (задача 11, Step 5 брифа). Две подписи AllowedIPs
+     разведены намеренно: в серверном [Peer] это адрес, который получает
+     клиент («Адрес в туннеле»), в клиентском конфиге — что клиент
+     заворачивает в туннель («Маршрутизировать в туннель»). Одно и то же имя
+     ключа для двух разных вещей — источник дорогих ошибок (constraint 1
+     брифа). -->
+<dialog id="editdlg">
+  <form method="dialog" id="editform">
+    <h2 id="edittitle">Изменить пира</h2>
+
+    <fieldset><legend>Пир</legend>
+      <label>Имя <input name="name" maxlength="40" required></label>
+      <label>Адрес в туннеле
+        <input name="address" required placeholder="10.0.0.7/32">
+        <small>это AllowedIPs в серверном [Peer] — какой адрес получает клиент</small>
+      </label>
+    </fieldset>
+
+    <fieldset><legend>Сеть клиента</legend>
+      <label>DNS <input name="dns" data-ovr></label>
+      <label>Маршрутизировать в туннель
+        <input name="allowed_ips" data-ovr>
+        <small>это AllowedIPs в конфиге КЛИЕНТА — какой трафик уходит в туннель</small>
+      </label>
+      <label>PersistentKeepalive <input name="keepalive" data-ovr></label>
+      <label>MTU
+        <input name="mtu" data-ovr inputmode="numeric">
+        <small>умолчание — MTU текущего серверного интерфейса, а не вкладки «Умолчания»:
+          у неё такого поля нет (issuer.Effective берёт MTU только с устройства)</small>
+      </label>
+      <label>Endpoint <input name="endpoint" data-ovr></label>
+    </fieldset>
+
+    <fieldset><legend>Обфускация клиента</legend>
+      <label>Jc <input name="jc" data-ovr inputmode="numeric"></label>
+      <label>Jmin <input name="jmin" data-ovr inputmode="numeric"></label>
+      <label>Jmax <input name="jmax" data-ovr inputmode="numeric"></label>
+      <label>Дополнительные поля
+        <textarea name="extra" rows="3" placeholder="I1 = &lt;b 0xf1&gt;"></textarea>
+        <small>по одному «Ключ = значение» в строке</small>
+      </label>
+    </fieldset>
+
+    <div id="editerr" style="color:var(--bad)"></div>
+    <menu>
+      <button value="save" class="primary">Сохранить</button>
+      <button value="rotate" id="editrotate" type="button">Ротировать ключи</button>
+      <button value="cancel" formnovalidate>Отмена</button>
+    </menu>
+  </form>
+</dialog>
+
+<script>
+// --- Мутирующая часть (задача 11): добавление, правка, ротация, QR. Внутри
+// read-only-гейта шаблона целиком — в read-only сборке этих обработчиков в
+// разметке нет вовсе (см. TestReadOnlyIndexShowsBadge). ---
+
+function showQR(name, src, dl, warn) {
+  const warnEl = document.getElementById("qrwarn");
+  warnEl.textContent = warn || "";
+  warnEl.style.display = warn ? "block" : "none";
+  document.getElementById("qrname").textContent = name;
+  document.getElementById("qrimg").src = src;
+  document.getElementById("qrdl").href = dl;
+  document.getElementById("qrdlg").showModal();
+}
+
+document.getElementById("addbtn").onclick = async () => {
+  const el = document.getElementById("newname");
+  const name = el.value.trim();
+  if (!name) return;
+  try {
+    const res = await api("POST", "/peers", { name });
+    el.value = "";
+    showQR(res.name, "data:image/png;base64," + res.qr_png_base64,
+           apiURL("/peers/" + encodeURIComponent(res.id) + "/config"));
+    refresh();
+  } catch (e) { showErr(e); }
+};
+
+// Колонка действий рисуется только здесь: в read-only сборке этот блок
+// шаблона не выводится вовсе, поэтому rowActions не существует, а refresh()
+// ниже просто не добавляет ячейку — и заголовок <th>Действия</th> там тоже
+// отсутствует, так что таблица остаётся согласованной.
+window.rowActions = p => {
+  const id = encodeURIComponent(p.id);
+  const toggle = p.enabled
+    ? '<button data-id="' + id + '" data-act="disable">Выключить</button>'
+    : '<button data-id="' + id + '" data-act="enable">Включить</button>';
+  return '<td class="act">'
+    + '<button data-id="' + id + '" data-act="qr">QR</button>'
+    + '<a href="' + apiURL("/peers/" + id + "/config") + '">.conf</a>'
+    + '<button data-id="' + id + '" data-act="edit">Изменить</button>'
+    + toggle
+    + '<button data-id="' + id + '" data-act="delete">Удалить</button>'
+    + '</td>';
+};
+// Обработчик один на всю таблицу: строки перерисовываются каждые 10 секунд,
+// и вешать слушатели на каждую кнопку заново — лишний способ их потерять.
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-act]");
+  if (b) peerAction(b.dataset.id, b.dataset.act);
+});
+window.peerAction = async (id, action) => {
+  try {
+    if (action === "delete") {
+      const p = window.__peers.find(x => x.id === id);
+      // Подтверждение вводом имени: случайно удалить рабочего пира нельзя.
+      const typed = prompt('Введите имя пира для подтверждения удаления:\n' + p.name);
+      if (typed !== p.name) return;
+      await api("DELETE", "/peers/" + id);
+    } else if (action === "qr") {
+      const p = window.__peers.find(x => x.id === id);
+      showQR(p.name, apiURL("/peers/" + id + "/qr"), apiURL("/peers/" + id + "/config"));
+      return;
+    } else if (action === "edit") {
+      await openEdit(id);
+      return;
+    } else {
+      await api("POST", "/peers/" + id + "/" + action);
+    }
+    refresh();
+  } catch (e) { showErr(e); }
+};
+
+// --- Форма правки пира: наследование от умолчаний и явная пустота ---
+//
+// У каждого оверрайда клиента свой источник наследования и своя допустимость
+// явной пустоты — оба свойства продиктованы сервером и здесь не угадываются:
+//   inherited  — issuer.Effective (internal/issuer/params.go): для mtu это НЕ
+//                defaults.json, а живой MTU серверного [Interface], и панель
+//                его нигде не запрашивает (вкладка «Сервер» — фаза 2,
+//                отменена целиком поправкой контролёра к этой задаче).
+//   emptyable  — issuer.ValidateOverrides: dns/keepalive принимают "" без
+//                проверки формата, а endpoint (net.SplitHostPort) и mtu
+//                (диапазон 576..9000) отклоняют пустую строку как невалидный
+//                ввод. Предлагать галочку «пусто» там, где сервер её не
+//                примет, — обещание, которое не выполнится. allowed_ips —
+//                тоже false, хотя формат у него не строже dns: явно пустой
+//                allowed_ips сервер тоже отклоняет (issuer.RenderClientConfig
+//                печатает строку AllowedIPs, только когда она непуста, — то
+//                есть явная пустота обрывала бы клиенту маршрутизацию в
+//                туннель целиком, а не наследовала умолчание). Раньше
+//                галочка здесь была, и это расходилось с соседней
+//                ValidateDefaults, которая то же самое поле уже требовала
+//                непустым (находка финального ревью, I2).
+//   numeric    — jc/jmin/jmax это store.Overrides.*int, а не *string: у них
+//                вообще нет состояния «явно пусто», только «не задано»
+//                (наследовать) или «задано числом N» (включая 0).
+const OVR_META = {
+  dns:         { emptyable: true,  numeric: false, inherited: d => d.dns },
+  allowed_ips: { emptyable: false, numeric: false, inherited: d => d.allowed_ips },
+  keepalive:   { emptyable: true,  numeric: false, inherited: d => d.keepalive },
+  endpoint:    { emptyable: false, numeric: false, inherited: d => d.endpoint },
+  mtu:         { emptyable: false, numeric: false, inherited: () => undefined },
+  jc:          { emptyable: false, numeric: true,  inherited: d => d.jc },
+  jmin:        { emptyable: false, numeric: true,  inherited: d => d.jmin },
+  jmax:        { emptyable: false, numeric: true,  inherited: d => d.jmax },
+};
+
+// emptyToggle создаёт галочку «пусто (не наследовать)» рядом с полем: явно
+// пустое значение отличается от наследования (constraint 3 брифа) — иначе
+// это различие, которое хранится указателем через весь бэкенд
+// (store.Overrides, PeerPatch), обрывалось бы на последнем шаге, в форме.
+//
+// Обёртка — span, а не label: поле data-ovr уже лежит внутри своего <label>
+// (например, "DNS <input data-ovr>"), а вложенные <label> — невалидный HTML
+// с непредсказуемым кликом мимо своего чекбокса. Ценой чуть меньшей area —
+// текст "пусто" не кликабелен, только сам чекбокс.
+function emptyToggle(el, checked) {
+  const wrap = document.createElement("span");
+  wrap.className = "setempty-wrap";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.className = "setempty";
+  box.checked = checked;
+  box.title = "задать явно пустым, а не наследовать умолчание";
+  box.onchange = () => {
+    el.disabled = box.checked;
+    if (box.checked) el.value = "";
+  };
+  wrap.append(box, document.createTextNode(" пусто"));
+  return wrap;
+}
+
+function fillEditForm(peer, defaults) {
+  const f = document.getElementById("editform");
+  f.dataset.id = peer.id;
+  document.getElementById("edittitle").textContent = "Изменить пира «" + peer.name + "»";
+  document.getElementById("editerr").textContent = "";
+  f.name.value = peer.name;
+  f.address.value = peer.address || "";
+  const ovr = peer.overrides || {};
+  for (const el of f.querySelectorAll("[data-ovr]")) {
+    const meta = OVR_META[el.name];
+    const inh = meta.inherited(defaults);
+    const inheritedIsEmpty = inh === undefined || inh === null || inh === "";
+    el.placeholder = el.name === "mtu"
+      ? "наследуется MTU сервера"
+      : "наследуется: " + (inheritedIsEmpty ? "(пусто)" : inh);
+    const cur = ovr[el.name];
+    el.value = (cur === undefined || cur === null) ? "" : String(cur);
+    const oldWrap = el.parentElement.querySelector(".setempty-wrap");
+    if (oldWrap) oldWrap.remove();
+    // Галочку показываем только когда есть смысл различать «наследовать» и
+    // «явно пусто»: если и умолчание уже пусто, оба варианта дают один и
+    // тот же результат, а не давать её вовсе — значит не оставлять поле
+    // навсегда disabled без единого способа его снова включить.
+    const showToggle = meta.emptyable && !inheritedIsEmpty;
+    if (showToggle) {
+      const forcedEmpty = cur === "";
+      el.disabled = forcedEmpty;
+      el.parentElement.append(emptyToggle(el, forcedEmpty));
+    } else {
+      el.disabled = false;
+    }
+  }
+  f.extra.value = Object.entries(ovr.extra || {}).map(([k, v]) => k + " = " + v).join("\n");
+}
+
+// parseExtra разбирает textarea вида "Ключ = значение" (по одной паре на
+// строку) в объект — общий формат для оверрайдов пира и умолчаний
+// интерфейса, отсюда и общая функция (была продублирована дословно, находка
+// ревью задачи 11).
+function parseExtra(text) {
+  const extra = {};
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    const i = line.indexOf("=");
+    if (i < 0) throw new Error("строка extra без знака =: " + line);
+    extra[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+  }
+  return extra;
+}
+
+function collectOverrides() {
+  const f = document.getElementById("editform");
+  const o = {};
+  for (const el of f.querySelectorAll("[data-ovr]")) {
+    const meta = OVR_META[el.name];
+    const box = meta.emptyable ? el.parentElement.querySelector(".setempty") : null;
+    if (box && box.checked) { o[el.name] = ""; continue; }
+    if (el.value.trim() === "") continue; // наследуем
+    if (meta.numeric) {
+      if (!/^-?\d+$/.test(el.value.trim())) {
+        throw new Error("поле " + el.name + " должно быть целым числом");
+      }
+      o[el.name] = Number(el.value.trim());
+    } else {
+      o[el.name] = el.value.trim();
+    }
+  }
+  const extra = parseExtra(f.extra.value);
+  if (Object.keys(extra).length) o.extra = extra;
+  return o;
+}
+
+async function openEdit(id) {
+  const p = window.__peers.find(x => x.id === id);
+  if (!p) return;
+  try {
+    if (!state.defaults) state.defaults = await api("GET", "/defaults");
+    fillEditForm(p, state.defaults);
+    document.getElementById("editdlg").showModal();
+  } catch (e) { showErr(e); }
+}
+
+const editdlg = document.getElementById("editdlg");
+
+// Перехватываем submit, а не полагаемся на закрытие method="dialog": иначе
+// диалог схлопнется РАНЬШЕ ответа PATCH, и неудачный запрос пришлось бы
+// показывать поверх уже закрытой формы. Кнопка «Отмена» (formnovalidate,
+// value="cancel") сюда не попадает содержательно — при submitter.value !==
+// "save" просто не вызываем preventDefault, и диалог закрывается штатно.
+document.getElementById("editform").addEventListener("submit", async e => {
+  if (e.submitter && e.submitter.value !== "save") return;
+  e.preventDefault();
+  const f = e.target;
+  const errEl = document.getElementById("editerr");
+  errEl.textContent = "";
+  try {
+    const overrides = collectOverrides();
+    await api("PATCH", "/peers/" + f.dataset.id, {
+      name: f.name.value.trim(), address: f.address.value.trim(), overrides,
+    });
+    editdlg.close();
+    refresh();
+  } catch (err) {
+    errEl.textContent = "Ошибка: " + err.message;
+  }
+});
+
+// Ротация — с подтверждением по имени пира, как удаление (constraint 4
+// брифа): старый конфиг перестаёт работать немедленно, и человек обязан
+// понимать, что делает, прежде чем это станет необратимо.
+document.getElementById("editrotate").onclick = async () => {
+  const f = document.getElementById("editform");
+  const id = f.dataset.id;
+  const name = f.name.value;
+  const typed = prompt(
+    'Ротация ключей пира «' + name + '»: старый конфиг перестанет работать немедленно.\n' +
+    'Введите имя пира для подтверждения:\n' + name);
+  if (typed !== name) return;
+  const errEl = document.getElementById("editerr");
+  errEl.textContent = "";
+  try {
+    const res = await api("POST", "/peers/" + id + "/rotate");
+    editdlg.close();
+    showQR(res.name, "data:image/png;base64," + res.qr_png_base64,
+           apiURL("/peers/" + encodeURIComponent(res.id) + "/config"),
+           "Ключи заменены — старый конфиг больше не работает.");
+    refresh();
+  } catch (err) {
+    errEl.textContent = "Ошибка: " + err.message;
+  }
+};
+</script>
+{{end}}
+<table>
+  <thead><tr>
+    <th>Имя</th><th>Адрес</th><th>Последний handshake</th>
+    <th class="hide-sm">↓ принято</th><th class="hide-sm">↑ отдано</th>
+    {{if not .ReadOnly}}<th>Действия</th>{{end}}
+  </tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+</section>
+
+{{if not .ReadOnly}}
+<section data-tab="defaults" hidden>
+  <h2>Умолчания клиента</h2>
+  <!-- Та же форма клиентских параметров, что у пира (Step 7 брифа задачи
+       11), но без полей «Имя»/«Адрес» (это свойства пира, не умолчаний) и
+       без MTU: у store.Defaults такого поля нет вовсе — MTU клиента по
+       умолчанию всегда берётся с живого серверного [Interface]
+       (issuer.Effective), а не отсюда. Показывать здесь поле, которое PUT
+       молча проигнорирует (json.Decoder не паникует на лишнем ключе), было
+       бы мёртвым элементом управления. Персонально MTU по-прежнему можно
+       задать в оверрайде конкретного пира. -->
+  <form id="defaultsform">
+    <fieldset><legend>Сеть клиента</legend>
+      <label>Endpoint <input name="endpoint" required placeholder="vpn.example.org:51820"></label>
+      <label>Маршрутизировать в туннель <input name="allowed_ips" required placeholder="0.0.0.0/0"></label>
+      <label>DNS <input name="dns"></label>
+      <label>PersistentKeepalive <input name="keepalive" placeholder="25"></label>
+    </fieldset>
+    <fieldset><legend>Обфускация клиента</legend>
+      <label>Jc <input name="jc" inputmode="numeric" required></label>
+      <label>Jmin <input name="jmin" inputmode="numeric" required></label>
+      <label>Jmax <input name="jmax" inputmode="numeric" required></label>
+      <label>Дополнительные поля
+        <textarea name="extra" rows="3" placeholder="I1 = &lt;b 0xf1&gt;"></textarea>
+        <small>по одному «Ключ = значение» в строке — общие для всех пиров без персонального оверрайда</small>
+      </label>
+    </fieldset>
+    <div id="defaultserr" style="color:var(--bad)"></div>
+    <menu><button value="save" class="primary">Сохранить умолчания</button></menu>
+  </form>
+</section>
+
+<script>
+// --- Вкладка «Умолчания» (задача 11, Step 7 брифа). В отличие от
+// оверрайдов пира, у Defaults нет наследования — это сам корень, от
+// которого наследуют, поэтому здесь нет ни плейсхолдеров, ни галочек
+// «пусто»: форма всегда показывает и всегда шлёт полный конкретный набор
+// значений. endpoint/allowed_ips обязаны быть непустыми (issuer.
+// ValidateDefaults) — это же выражено атрибутом required. ---
+
+async function loadDefaultsTab() {
+  const f = document.getElementById("defaultsform");
+  const errEl = document.getElementById("defaultserr");
+  errEl.textContent = "";
+  try {
+    if (!state.defaults) state.defaults = await api("GET", "/defaults");
+    const d = state.defaults;
+    f.endpoint.value = d.endpoint || "";
+    f.allowed_ips.value = d.allowed_ips || "";
+    f.dns.value = d.dns || "";
+    f.keepalive.value = d.keepalive || "";
+    f.jc.value = d.jc;
+    f.jmin.value = d.jmin;
+    f.jmax.value = d.jmax;
+    f.extra.value = Object.entries(d.extra || {}).map(([k, v]) => k + " = " + v).join("\n");
+  } catch (e) { errEl.textContent = "Ошибка: " + e.message; }
+}
+
+document.getElementById("defaultsform").addEventListener("submit", async e => {
+  e.preventDefault();
+  const f = e.target;
+  const errEl = document.getElementById("defaultserr");
+  errEl.textContent = "";
+  try {
+    for (const key of ["jc", "jmin", "jmax"]) {
+      if (!/^-?\d+$/.test(f[key].value.trim())) {
+        throw new Error("поле " + key + " должно быть целым числом");
+      }
+    }
+    const extra = parseExtra(f.extra.value);
+    await api("PUT", "/defaults", {
+      endpoint: f.endpoint.value.trim(),
+      allowed_ips: f.allowed_ips.value.trim(),
+      dns: f.dns.value.trim(),
+      keepalive: f.keepalive.value.trim(),
+      jc: Number(f.jc.value.trim()),
+      jmin: Number(f.jmin.value.trim()),
+      jmax: Number(f.jmax.value.trim()),
+      extra,
+    });
+    // Плейсхолдеры наследования в модалке правки пира обязаны отразить
+    // новые умолчания при следующем открытии — сброс кэша, не рефетч:
+    // openEdit загрузит их заново лениво, когда действительно понадобятся.
+    state.defaults = null;
+    errEl.style.color = "var(--ok)";
+    errEl.textContent = "Сохранено.";
+    refresh();
+  } catch (e) {
+    errEl.style.color = "var(--bad)";
+    errEl.textContent = "Ошибка: " + e.message;
+  }
+});
+</script>
+{{end}}
+
+<script>
+// --- Общее для обеих сборок: список пиров и его обновление. ---
+const fmtBytes = n => {
+  if (!n) return "—";
+  const u = ["Б","КБ","МБ","ГБ","ТБ"];
+  let i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toFixed(i ? 1 : 0) + " " + u[i];
+};
+const fmtAgo = ts => {
+  if (!ts) return null;
+  const s = Math.floor(Date.now() / 1000) - ts;
+  if (s < 60) return s + " с назад";
+  if (s < 3600) return Math.floor(s / 60) + " мин назад";
+  if (s < 86400) return Math.floor(s / 3600) + " ч назад";
+  return Math.floor(s / 86400) + " дн назад";
+};
+const esc = s => String(s).replace(/[&<>"]/g, c =>
+  ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+async function refresh() {
+  try {
+    const peers = await api("GET", "/peers");
+    document.getElementById("err").textContent = "";
+    // Список нужен обработчикам действий: подтверждение удаления сверяет
+    // введённое имя с настоящим, окно QR подписывается им же, а правка
+    // берёт из него текущие overrides пира (см. openEdit).
+    window.__peers = peers;
+    document.getElementById("rows").innerHTML = peers.map(p => {
+      // «Никогда не подключался» подсвечивается намеренно: это единственный
+      // видимый симптом клиента со старой версией AWG, отбрасывающей v3-поля.
+      const hs = p.never_connected
+        ? '<span class="never">никогда</span>'
+        : (p.enabled ? '<span class="live">' + (fmtAgo(p.last_handshake) || "—") + '</span>' : "—");
+      const act = window.rowActions ? window.rowActions(p) : "";
+      return `<tr class="${p.enabled ? "" : "off"}">
+        <td>${esc(p.name)}</td>
+        <td class="num">${esc(p.address)}</td>
+        <td>${hs}</td>
+        <td class="num hide-sm">${fmtBytes(p.rx_bytes)}</td>
+        <td class="num hide-sm">${fmtBytes(p.tx_bytes)}</td>
+        ${act}
+      </tr>`;
+    }).join("");
+  } catch (e) { showErr(e); }
+}
+markActive();
+refresh();
+setInterval(refresh, 10000);
+</script>

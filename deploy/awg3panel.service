@@ -1,0 +1,39 @@
+[Unit]
+Description=awg3-panel — выпуск клиентских конфигов AmneziaWG 3.0
+Documentation=https://github.com/Jkaotlic/amneziawg-panel
+After=network-online.target awg3.service
+Wants=network-online.target
+# Ни PartOf=, ни BindsTo= сознательно нет: панель не управляет туннелем,
+# и её падение или перезапуск не должны затрагивать awg3.service.
+
+[Service]
+Type=simple
+# root нужен для сокета AmneziaWG и конфига с правами 600.
+User=root
+ExecStart=/usr/local/bin/awg3panel -config /etc/awg3panel/config.yaml serve
+Restart=on-failure
+RestartSec=5s
+# У панели свой graceful-таймаут в 30s (internal/web/server.go,
+# shutdownTimeout). TimeoutStopSec обязан быть строго больше него с
+# запасом — иначе systemd пришлёт SIGKILL раньше, чем сервер успеет
+# доработать начатые запросы (финальное ревью, требование к выкату).
+TimeoutStopSec=90s
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_UNIX
+ReadWritePaths=/etc/amnezia/amneziawg /var/lib/awg3panel
+MemoryMax=64M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target
